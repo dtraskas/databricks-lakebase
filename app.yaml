@@ -1,0 +1,22 @@
+command: ["uv", "run", "uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+resources:
+  - name: "lakebase-postgres"
+    description: "Lakebase PostgreSQL database"
+    database:
+      name: "projects/dev-instance/branches/production/databases/databricks-postgres"
+      permission: "CAN_CONNECT_AND_CREATE"
+
+env:
+  - name: PGHOST
+    value: 'ep-weathered-field-d89uf5m1.database.us-east-2.cloud.databricks.com'
+  - name: PGDATABASE
+    value: 'databricks_postgres'
+  - name: PGUSER
+    value: 'dtraskas@gmail.com'
+  - name: PGPORT
+    value: '5432'
+  - name: PGSSLMODE
+    value: 'require'
+  - name: ENDPOINT_NAME
+    value: 'projects/dev-instance/branches/production/endpoints/primary'

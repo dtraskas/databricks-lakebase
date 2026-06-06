@@ -1,0 +1,26 @@
+bundle:
+  name: lakebase
+
+workspace:
+  host: https://dbc-bbfb0194-f4b4.cloud.databricks.com
+
+sync:
+  include:
+    - frontend/dist/**
+
+resources:
+  apps:
+    lakebase:
+      name: "lakebase"
+      description: "A template for building applications with Databricks Lakebase."
+      source_code_path: ${workspace.file_path}
+
+targets:
+  dev:
+    default: true
+    mode: development
+
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-bbfb0194-f4b4.cloud.databricks.com

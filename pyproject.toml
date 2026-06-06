@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lakebase"
+version = "0.1.0"
+description = "A template for building applications with Databricks Lakebase"
+requires-python = ">=3.11"
+dependencies = [
+    "databricks-sdk>=0.40.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "psycopg[binary,pool]>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "uvicorn[standard]>=0.32.0",
+]
+
+[project.scripts]
+quickstart  = "scripts.quickstart:main"
+start-app   = "scripts.start_app:main"
+preflight   = "scripts.preflight:main"
+deploy      = "scripts.deploy:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend", "frontend", "scripts"]
