@@ -4,21 +4,29 @@ scripts/deploy.py
 
 Deploy the Lakebase app to Databricks Apps.
 
+Flow: bundle deploy (creates/updates the app + compute) → wait for the compute
+to become ACTIVE → apps deploy (uploads and runs the code). The wait matters on
+a from-scratch deploy: a newly created app's compute is still provisioning and
+`apps deploy` fails if it runs before the compute is ready.
+
 Usage:
     uv run python -m scripts.deploy
     uv run python -m scripts.deploy --profile my-profile
     uv run python -m scripts.deploy --target prod
     uv run python -m scripts.deploy --skip-build
     uv run python -m scripts.deploy --auto-approve
+    uv run python -m scripts.deploy --timeout 900
 """
 
 import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
+POLL_INTERVAL = 5  # seconds between app-status polls
 
 
 def ok(msg: str):
@@ -31,49 +39,6 @@ def info(msg: str):
 
 def error(msg: str):
     print(f"  [!] {msg}")
-
-
-ENV_KEYS = ["PGHOST", "PGDATABASE", "PGUSER", "PGPORT", "PGSSLMODE", "ENDPOINT_NAME", "PGPASSWORD"]
-
-
-def sync_env_to_app_yaml() -> bool:
-    env_file = PROJECT_ROOT / ".env"
-    app_yaml = PROJECT_ROOT / "app.yaml"
-
-    if not env_file.exists():
-        error(".env not found — cannot inject environment into app.yaml")
-        return False
-
-    # Parse .env (simple key=value, skip comments and blanks)
-    env_vars: dict[str, str] = {}
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        if key.strip() in ENV_KEYS:
-            env_vars[key.strip()] = value.strip()
-
-    if not env_vars:
-        error("No recognised env vars found in .env")
-        return False
-
-    # Build the env block
-    env_lines = ["env:"]
-    for key, value in env_vars.items():
-        env_lines.append(f"  - name: {key}")
-        env_lines.append(f"    value: '{value}'")
-
-    # Replace the existing env: block (everything from 'env:' to end of file)
-    content = app_yaml.read_text()
-    if "env:" in content:
-        content = content[: content.index("env:")] + "\n".join(env_lines) + "\n"
-    else:
-        content = content.rstrip() + "\n\n" + "\n".join(env_lines) + "\n"
-
-    app_yaml.write_text(content)
-    ok(f"app.yaml env synced ({', '.join(env_vars)})")
-    return True
 
 
 def check_prerequisites() -> bool:
@@ -137,6 +102,30 @@ def build_frontend() -> bool:
     return True
 
 
+def resolve_bundle_config(profile: str | None, target: str | None) -> tuple[str, str] | None:
+    """Return (source_code_path, app_name) from the resolved bundle config."""
+    cmd = ["databricks", "bundle", "validate", "-o", "json"]
+    if profile:
+        cmd += ["--profile", profile]
+    if target:
+        cmd += ["--target", target]
+
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        error("Could not resolve bundle configuration")
+        return None
+
+    try:
+        config = json.loads(result.stdout)
+        return (
+            config["workspace"]["file_path"],
+            config["resources"]["apps"]["lakebase"]["name"],
+        )
+    except (KeyError, json.JSONDecodeError) as e:
+        error(f"Could not parse bundle config: {e}")
+        return None
+
+
 def deploy(profile: str | None, target: str | None, auto_approve: bool, force: bool) -> bool:
     cmd = ["databricks", "bundle", "deploy"]
     if profile:
@@ -156,28 +145,68 @@ def deploy(profile: str | None, target: str | None, auto_approve: bool, force: b
     return True
 
 
-def create_app_deployment(profile: str | None, target: str | None) -> bool:
-    # Resolve the bundle's file_path for this target so the deployment points
-    # at the code that bundle deploy just uploaded.
-    validate_cmd = ["databricks", "bundle", "validate", "-o", "json"]
+def _get_app(app_name: str, profile: str | None) -> dict | None:
+    cmd = ["databricks", "apps", "get", app_name, "-o", "json"]
     if profile:
-        validate_cmd += ["--profile", profile]
-    if target:
-        validate_cmd += ["--target", target]
+        cmd += ["--profile", profile]
 
-    result = subprocess.run(validate_cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        error("Could not resolve bundle configuration")
-        return False
-
+        return None
     try:
-        config = json.loads(result.stdout)
-        source_code_path = config["workspace"]["file_path"]
-        app_name = config["resources"]["apps"]["lakebase"]["name"]
-    except (KeyError, json.JSONDecodeError) as e:
-        error(f"Could not parse bundle config: {e}")
-        return False
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
 
+
+def _start_app(app_name: str, profile: str | None) -> bool:
+    cmd = ["databricks", "apps", "start", app_name]
+    if profile:
+        cmd += ["--profile", profile]
+    return subprocess.run(cmd).returncode == 0
+
+
+def wait_for_app_ready(app_name: str, profile: str | None, timeout: int) -> bool:
+    """Poll until the app's compute is ACTIVE.
+
+    Needed for from-scratch deploys: `bundle deploy` creates the app but its
+    compute provisions asynchronously, and `apps deploy` fails against a compute
+    that is still STARTING. If the compute comes up STOPPED, start it.
+    """
+    deadline = time.time() + timeout
+    started = False
+
+    while time.time() < deadline:
+        app = _get_app(app_name, profile)
+        if app is None:
+            info("App not visible yet — waiting...")
+            time.sleep(POLL_INTERVAL)
+            continue
+
+        compute_state = (app.get("compute_status") or {}).get("state")
+
+        if compute_state == "ACTIVE":
+            ok("App compute is active")
+            return True
+        if compute_state == "ERROR":
+            msg = (app.get("compute_status") or {}).get("message", "")
+            error(f"App compute is in ERROR state. {msg}")
+            return False
+        if compute_state == "STOPPED" and not started:
+            info("App compute is stopped — starting it...")
+            _start_app(app_name, profile)
+            started = True
+            continue
+
+        info(f"Waiting for app compute (state: {compute_state or 'unknown'})...")
+        time.sleep(POLL_INTERVAL)
+
+    error(f"Timed out after {timeout}s waiting for the app compute to become active")
+    return False
+
+
+def create_app_deployment(app_name: str, source_code_path: str, profile: str | None) -> bool:
+    """Upload and run the code that `bundle deploy` just synced to the workspace."""
     cmd = ["databricks", "apps", "deploy", app_name, "--source-code-path", source_code_path]
     if profile:
         cmd += ["--profile", profile]
@@ -190,21 +219,6 @@ def create_app_deployment(profile: str | None, target: str | None) -> bool:
     return True
 
 
-def start_app(profile: str | None, target: str | None) -> bool:
-    cmd = ["databricks", "apps", "start"]
-    if profile:
-        cmd += ["--profile", profile]
-    if target:
-        cmd += ["--target", target]
-
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
-    if result.returncode != 0:
-        error("Failed to start app")
-        return False
-
-    return True
-
-
 def main():
     parser = argparse.ArgumentParser(description="Deploy Lakebase to Databricks Apps")
     parser.add_argument("--profile", help="Databricks CLI profile (~/.databrickscfg)")
@@ -212,10 +226,25 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="Skip frontend build")
     parser.add_argument("--auto-approve", action="store_true", help="Skip interactive prompts")
     parser.add_argument("--force", action="store_true", help="Force-override Git branch validation")
+    parser.add_argument(
+        "--timeout", type=int, default=600,
+        help="Seconds to wait for the app compute to become active (default: 600)",
+    )
     args = parser.parse_args()
 
     target_label = args.target or "dev"
     print(f"\nDeploying lakebase → {target_label}\n")
+
+    # Resolved once after the bundle deploy step populates it.
+    config: dict[str, str] = {}
+
+    def resolve_step() -> bool:
+        resolved = resolve_bundle_config(args.profile, args.target)
+        if resolved is None:
+            return False
+        config["source_code_path"], config["app_name"] = resolved
+        ok(f"App: {config['app_name']}")
+        return True
 
     steps: list[tuple[str, object]] = [
         ("Prerequisites", lambda: check_prerequisites()),
@@ -223,20 +252,18 @@ def main():
     ]
     if not args.skip_build:
         steps.append(("Frontend", lambda: build_frontend()))
-    steps.append(("Env", lambda: sync_env_to_app_yaml()))
     steps.append(("Deploy", lambda: deploy(
         profile=args.profile,
         target=args.target,
         auto_approve=args.auto_approve,
         force=args.force,
     )))
-    steps.append(("Release", lambda: create_app_deployment(
-        profile=args.profile,
-        target=args.target,
+    steps.append(("Resolve", resolve_step))
+    steps.append(("Wait", lambda: wait_for_app_ready(
+        config["app_name"], args.profile, args.timeout,
     )))
-    steps.append(("Start", lambda: start_app(
-        profile=args.profile,
-        target=args.target,
+    steps.append(("Release", lambda: create_app_deployment(
+        config["app_name"], config["source_code_path"], args.profile,
     )))
 
     for step_name, step_fn in steps:

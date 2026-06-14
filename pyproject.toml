@@ -23,6 +23,7 @@ quickstart  = "scripts.quickstart:main"
 start-app   = "scripts.start_app:main"
 preflight   = "scripts.preflight:main"
 deploy      = "scripts.deploy:main"
+clean       = "scripts.clean:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend", "frontend", "scripts"]

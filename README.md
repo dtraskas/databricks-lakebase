@@ -1,21 +1,13 @@
 # Lakebase Template
 
-A minimal starter template for building applications with Databricks Lakebase. A Python FastAPI backend serves a React frontend and connects to a Lakebase (Autoscaling Postgres) endpoint using OAuth tokens that are refreshed automatically in the background.
-
-## Features
-
-- **FastAPI Backend**: Async Python backend with SQLAlchemy + asyncpg connection pooling
-- **Lakebase Integration**: Connects to a Lakebase Postgres endpoint with automatic OAuth token rotation
-- **React Frontend**: Modern React UI with Vite, served directly from the backend
-- **OAuth Tokens**: Fresh credentials minted via the Databricks SDK and refreshed every 40 minutes
-- **Deploy-first workflow**: Ships to Databricks Apps via Databricks Asset Bundles (DABs)
+Minimal starter template for building applications with Databricks Lakebase. A Python FastAPI backend serves a React frontend and connects to a Lakebase endpoint using OAuth tokens that are refreshed automatically in the background.
 
 ## Quick Start
 
-### 1. Initialize the Project
+### 1. Initialise the Project
 
 ```bash
-uv run python -m scripts.quickstart
+uv run quickstart
 ```
 
 This will:
@@ -34,38 +26,24 @@ This sets up credentials locally. The app uses them automatically to mint OAuth 
 ### 3. Start the App
 
 ```bash
-uv run python -m scripts.start_app
-```
-
-Visit `http://localhost:8000` to see your app.
-
-**Optional**: Start with the frontend dev server (Vite hot reload):
-```bash
-uv run python -m scripts.start_app --dev
+uv run python start-app
 ```
 
 ## Environment Variables
 
-A single set of variables works for both local development and Databricks deployment. Copy `.env.example` to `.env` (gitignored) and fill in your values.
+A single set of variables works for both local development and Databricks deployment. Copy `.env.example` to `.env` and fill in your values.
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `LAKEBASE_ENDPOINT` | **Yes** | — | Endpoint resource path. Locally it resolves the host and mints OAuth tokens; on deploy it is injected from the postgres resource binding via `valueFrom` in `app.yaml`. |
-| `PGDATABASE` | No | `databricks_postgres` | Postgres database name. |
-| `PGUSER` | No | current Databricks user | Connecting Postgres role. On deploy the platform injects the app's service principal client ID. |
-| `PGHOST` | No | resolved from endpoint | Lakebase hostname. Auto-injected on Databricks Apps; resolved locally from `LAKEBASE_ENDPOINT`. |
+`LAKEBASE_ENDPOINT`: Endpoint resource path. Locally it resolves the host and mints OAuth tokens; on deploy it is injected from the postgres resource binding via `valueFrom` in `app.yaml`. 
 
-> **Local vs. deploy:** Locally these come from `.env` via `load_dotenv()`. On Databricks Apps, `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGSSLMODE` are auto-injected from the postgres resource binding — but `LAKEBASE_ENDPOINT` is **not**, so `app.yaml` maps it explicitly with `valueFrom`. Authentication is always OAuth; there is no static-password option.
+`PGDATABASE`: Postgres database name.
 
-Find the endpoint path with:
-```bash
-databricks postgres list-endpoints projects/<project>/branches/<branch>
-```
+`LAKEBASE_BRANCH`: Selecting Production or other branches
 
 Example `.env`:
 ```
 LAKEBASE_ENDPOINT=projects/dev-instance/branches/production/endpoints/primary
 PGDATABASE=databricks_postgres
+LAKEBASE_BRANCH=production
 ```
 
 ## Project Structure
@@ -88,6 +66,7 @@ PGDATABASE=databricks_postgres
 │   ├── quickstart.py         # Setup wizard
 │   ├── start_app.py          # Application launcher
 │   ├── deploy.py             # Databricks Apps deploy helper
+│   ├── clean.py              # Tear down the deployment + local bundle state
 │   └── preflight.py          # Health checks
 ├── app.yaml                  # Databricks Apps runtime config (command + env)
 ├── databricks.yaml           # Databricks Asset Bundle (app resource + postgres binding)
@@ -111,25 +90,20 @@ The built React frontend is served from `/`.
 
 ```bash
 # One-time setup
-uv run python -m scripts.quickstart
+uv run quickstart
 
 # Start backend + built frontend
-uv run python -m scripts.start_app
-
-# Start with frontend dev server (Vite hot reload)
-uv run python -m scripts.start_app --dev
+uv run start-app
 
 # Run health checks
-uv run python -m scripts.preflight
+uv run preflight
 
 # Deploy to Databricks Apps
-uv run python -m scripts.deploy
+uv run deploy
 
-# Start backend directly
-python -m backend.app
+# Tear down the deployment (and local .databricks/ state)
+uv run clean
 
-# Rebuild frontend
-cd frontend && npm run build
 ```
 
 ## Development
@@ -155,22 +129,15 @@ The React frontend is in `frontend/src`. To modify:
 
 The app deploys to **Databricks Apps** via Databricks Asset Bundles. The bundle ([databricks.yaml](databricks.yaml)) defines the app and binds it to the Lakebase database; [app.yaml](app.yaml) defines the runtime command and maps `LAKEBASE_ENDPOINT` from the resource binding.
 
+### Teardown
+
+Remove the deployed app, its compute, and the uploaded source files, then delete the local `.databricks/` bundle state:
+
 ```bash
-# 1. Build the frontend
-cd frontend && npm run build && cd ..
-
-# 2. Deploy the bundle (uploads source + updates the app spec)
-databricks bundle deploy --profile <PROFILE>
-
-# 3. Deploy the app itself so it restarts with the new config
-databricks apps deploy lakebase \
-  --source-code-path "/Workspace/Users/<you>/.bundle/lakebase/dev/files" \
-  --profile <PROFILE>
+uv run python clean
 ```
 
-Or use the helper: `uv run python -m scripts.deploy --profile <PROFILE>`.
-
-> **Important:** `databricks bundle deploy` updates the app spec but does **not** restart the running container. Environment-variable changes only take effect after `databricks apps deploy` (or a stop/start). The `LAKEBASE_ENDPOINT` mapping in `app.yaml` uses `valueFrom: lakebase-postgres` (the resource name) — for an Autoscaling Lakebase resource this resolves to the endpoint path.
+This runs `databricks bundle destroy` followed by removing `.databricks/`. It prompts for confirmation (skip with `--auto-approve`). The **Lakebase project/database is not touched** — it is referenced by the bundle, not created by it, so your data is safe.
 
 ### Schema permissions
 
