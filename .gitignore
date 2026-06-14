@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.venv
 
 # Backend
 __pycache__/
@@ -49,3 +50,4 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+/logs

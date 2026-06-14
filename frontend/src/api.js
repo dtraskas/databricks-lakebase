@@ -1,15 +1,13 @@
-const API_BASE = 'http://localhost:8000';
-
 class LakebaseClient {
-  async queryLakebase(table = 'information_schema.tables') {
-    const response = await fetch(`${API_BASE}/api/lakebase/query?table=${encodeURIComponent(table)}`);
-    if (!response.ok) throw new Error('Failed to query Lakebase');
+  async getLakebaseData(table = 'information_schema.tables') {
+    const response = await fetch(`/api/lakebase/data?table=${encodeURIComponent(table)}`);
+    if (!response.ok) throw new Error(`Failed to fetch Lakebase data: ${response.status}`);
     return response.json();
   }
 
   async health() {
-    const response = await fetch(`${API_BASE}/health`);
-    if (!response.ok) throw new Error('Health check failed');
+    const response = await fetch('/health');
+    if (!response.ok) throw new Error(`Health check failed: ${response.status}`);
     return response.json();
   }
 }

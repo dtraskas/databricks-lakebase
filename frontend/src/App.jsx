@@ -25,7 +25,7 @@ function App() {
     try {
       setLoading(true);
       setError(null);
-      const result = await client.queryLakebase(table);
+      const result = await client.getLakebaseData(table);
       setQueryResult(result);
     } catch (err) {
       setError(err.message);

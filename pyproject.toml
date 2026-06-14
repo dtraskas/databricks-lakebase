@@ -8,11 +8,13 @@ version = "0.1.0"
 description = "A template for building applications with Databricks Lakebase"
 requires-python = ">=3.11"
 dependencies = [
-    "databricks-sdk>=0.40.0",
+    "asyncpg>=0.30.0",
+    "databricks-sdk>=0.60.0",
     "fastapi>=0.115.0",
-    "httpx>=0.27.0",
-    "psycopg[binary,pool]>=3.1.0",
+    "greenlet>=3.0.0",
     "python-dotenv>=1.0.0",
+    "sqlalchemy>=2.0.0",
+    "sqlmodel>=0.0.21",
     "uvicorn[standard]>=0.32.0",
 ]
 

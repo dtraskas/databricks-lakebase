@@ -1,9 +1,15 @@
 bundle:
   name: lakebase
 
-workspace:
-  host: https://dbc-bbfb0194-f4b4.cloud.databricks.com
+variables:
+  lakebase_branch:
+    description: Lakebase branch resource path
+    default: projects/dev-instance/branches/production
+  lakebase_database:
+    description: Lakebase database resource path
+    default: projects/dev-instance/branches/production/databases/databricks-postgres
 
+# Ship the built frontend (gitignored) alongside the source.
 sync:
   include:
     - frontend/dist/**
@@ -11,9 +17,19 @@ sync:
 resources:
   apps:
     lakebase:
-      name: "lakebase"
-      description: "A template for building applications with Databricks Lakebase."
-      source_code_path: ${workspace.file_path}
+      name: lakebase
+      description: "FastAPI app connected to a Databricks Lakebase database."
+      source_code_path: .
+
+      # Binds the app's service principal to the Lakebase database. On deploy
+      # the platform auto-injects PGHOST/PGPORT/PGDATABASE/PGUSER/PGSSLMODE, and
+      # app.yaml maps this resource to LAKEBASE_ENDPOINT via `valueFrom`.
+      resources:
+        - name: lakebase-postgres
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
 
 targets:
   dev:
@@ -22,5 +38,3 @@ targets:
 
   prod:
     mode: production
-    workspace:
-      host: https://dbc-bbfb0194-f4b4.cloud.databricks.com
